@@ -41,8 +41,8 @@ function prompt_mountpoints () {
 			[yY]* ) break;;
 			[nN]* ) echo -e "I am a dumb script, if these are not the desired partitions please press 'h'";; 
 			[qQ]* ) exit;;
-			[hH]* ) echo -e "If you do not wish for partitions to be formatted or remounted comment lines __ in the script and manually introduce devices path on lines __.\n\
-The root partition will be formatted to ext4. Configuration for any other filesystems is not provided in the script nor accounted for.\n\nPress 'q' to quit";;
+			[sS]* ) echo -e "Skipping\n"; NO_FORMAT=1; return;; 
+			[hH]* ) echo -e "If you do not wish for partitions to be formatted, formatted them manually for your liking and press 's' to skip this part.\nThe root partition will be formatted to ext4. Configuration for any other filesystems is not provided in the script nor accounted for.\nPress 'q' to quit";;
 			*) echo "Invalid option"
 		esac
 	done
@@ -52,39 +52,74 @@ function format_partitions () {
 	for(( i = 0; i < ${#DEVICES[@]}; ++i)); do
 		case ${partitions[$i]} in
 			EFI) 
-				# check if efi partition is empty (check for dual boot)
 				read -p "Do you wish to format EFI partition on /dev/${DEVICES[${partitions[$i]}]}? [y/N] " prompt
 				if [[ "$prompt" =~ [Yy] ]]; then
 					echo -e "\nFormatting /dev/${DEVICES[${partitions[$i]}]} to FAT32\n"
+					mkfs.fat -F 32 /dev/${DEVICES[${partitions[$i]}]}
 				else
 					echo -e "\n${RED}Ignoring EFI partition${NC}\n"
 				fi
-			;;
-			*[filesystem]) echo -e "Formatting /dev/${DEVICES[${partitions[$i]}]} to ext4\n" ;;
+				;;
+			*[filesystem]) 
+				echo -e "\nFormatting /dev/${DEVICES[${partitions[$i]}]} to ext4\n"
+				mkfs.ext4 /dev/${DEVICES[${partitions[$i]}]}
+				;;
 			*[swap])
 				if [[ ! "${DEVICES[${partitions[$i]}]}" ]]; then
-					echo -e "No swap partition, skipping\n"
+					echo -e "No swap partition, skipping"
 					continue
 				else
-					echo -e "Selecting swap partition on /dev/${DEVICES[${partitions[$i]}]}\n"; 
+					echo -e "\nSelecting swap partition on /dev/${DEVICES[${partitions[$i]}]}\n"; 
+					mkswap /dev/${DEVICES[${partitions[$i]}]}
 				fi
-			;;
-			*) echo "Failed to format ${DEVICES[${partitions[$i]}]}"
+				;;
+			*) echo "\nFailed to format ${DEVICES[${partitions[$i]}]}\n"
 		esac
+		echo ""
 	done
 }
 
 function mount_devices () {
-	#echo "/dev/${DEVICES["Linux filesystem"]}"
-	#echo "/dev/${DEVICES["EFI"]}"
-	#[[ "${DEVICES["Linux swap"]}" ]] && echo "/dev/${DEVICES["Linux swap"]}"
+	mount /dev/${DEVICES["Linux filesystem"]} /mnt
+	mount --mkdir /dev/${DEVICES["EFI"]} /mnt/boot/efi
+	[[ "${DEVICES["Linux swap"]}" ]] && swapon /dev/${DEVICES["Linux swap"]}
 	df -Th | head -n 1; df -Th | grep "${DEVICES["EFI"]}\|${DEVICES["Linux filesystem"]}"
+	echo ""
 	read -p "Confirm? [y/N] " prompt
 	if [[ ! "$prompt" =~ [yY] ]]; then
-		echo -e "\nUnmounting"
+		umount -R /mnt/boot/efi
+		umount -R /mnt
+		[[ "${DEVICES["Linux swap"]}" ]] && swapoff /dev/${DEVICES["Linux swap"]}
+		echo -e "Devices unmounted\n"
 		exit
 	fi
 	echo ""
+}
+
+function generate_locales () {
+	valid_locales=()
+	for el in "${locales[@]}"; do
+		if [[ $(grep "^#"$el".UTF-8" /etc/locale.gen 2> /dev/null) ]]; then
+			echo "Found locale: $el"
+			valid_locales+=("$el")
+		else
+			echo "Couldn't find or is already selected locale: $el"
+		fi
+	done
+
+	for el in "${valid_locales[@]}"; do
+		sed -i '/^#'$el'.UTF-8/s/^#//' /etc/locale.gen
+	done
+
+	# generate valid locales
+	locale-gen
+
+	# my default locales
+	cat > /etc/locale.conf <<EOF
+	LANG=en_US.UTF-8
+	LC_TIME=pt_PT.UTF-8
+EOF
+
 }
 
 # configure system clock
@@ -94,16 +129,32 @@ partitions=("EFI" "Linux filesystem" "Linux swap")
 declare -A DEVICES=()
 
 echo -e "${GREEN}Checking partitions${NC}" && get_mountpoints && prompt_mountpoints
-echo -e "${GREEN}Formatting partitions${NC}" && format_partitions
-echo -e "${GREEN}Mounting completed${NC}" && mount_devices
-echo -e "${GREEN}It's showtime baby${NC}\n" && neofetch
+[[ ! "$NO_FORMAT" ]] && echo -e "${GREEN}Formatting partitions${NC}" && format_partitions
+echo -e "${GREEN}Mounting devices${NC}" && mount_devices
 
-# the end of the script will simply configure i3-gaps, neovim, polybar and rofi launchers
+# the end of the script will configure i3-gaps, zsh, neovim, polybar, conky and rofi launchers
+# ill ditch picom because it's overrated
 pkgs=(\
 	base linux linux-firmware base-devel grub efibootmgr os-prober\
 	xorg-server lightdm lightdm-slick-greeter i3-gaps\
-	sudo man-db neovim openssh git tree 
+	sudo man-db neovim openssh git tree\
+	rofi polybar conky dunst\
 )
 # nvim is usually removed for VMs
 	
-echo "pacstrap /mnt ${pkgs[@]}"
+# install packages
+echo -e "${GREEN}Installing packages${NC}"
+pacstrap /mnt ${pkgs[@]}
+echo ""
+
+# generating fstab
+echo -e "${GREEN}Generating fstab${NC}"
+genfstab -U /mnt >> /mnt/etc/fstab
+cat /mnt/etc/fstab
+
+# changing root into new system
+arch-chroot /mnt
+
+# generate and configure locales (don't remove these two, add if needed)
+locales=("en_US", "pt_PT")
+echo -e "${GREEN}Generating and configuring locales${NC}" && generate_locales()
