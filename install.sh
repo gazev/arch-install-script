@@ -96,6 +96,14 @@ declare -A DEVICES=()
 echo -e "${GREEN}Checking partitions${NC}" && get_mountpoints && prompt_mountpoints
 echo -e "${GREEN}Formatting partitions${NC}" && format_partitions
 echo -e "${GREEN}Mounting completed${NC}" && mount_devices
-echo -e "${GREEN}ITS SHOWTIME BABY${NC}" && neofetch
+echo -e "${GREEN}It's showtime baby${NC}\n" && neofetch
 
-
+# the end of the script will simply configure i3-gaps, neovim, polybar and rofi launchers
+pkgs=(\
+	base linux linux-firmware base-devel grub efibootmgr os-prober\
+	xorg-server lightdm lightdm-slick-greeter i3-gaps\
+	sudo man-db neovim openssh git tree 
+)
+# nvim is usually removed for VMs
+	
+echo "pacstrap /mnt ${pkgs[@]}"
