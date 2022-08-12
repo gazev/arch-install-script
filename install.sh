@@ -87,7 +87,6 @@ function mount_devices () {
 	echo ""
 	read -p "Confirm? [y/N] " prompt
 	if [[ ! "$prompt" =~ [yY] ]]; then
-		umount -R /mnt/boot/efi
 		umount -R /mnt
 		[[ "${DEVICES["Linux swap"]}" ]] && swapoff /dev/${DEVICES["Linux swap"]}
 		echo -e "Devices unmounted\n"
@@ -95,6 +94,46 @@ function mount_devices () {
 	fi
 	echo ""
 }
+
+
+# configure system clock
+#timedatectl set-ntp true
+
+partitions=("EFI" "Linux filesystem" "Linux swap")
+declare -A DEVICES=()
+
+echo -e "${GREEN}Checking partitions${NC}" && get_mountpoints && prompt_mountpoints
+[[ ! "$NO_FORMAT" ]] && echo -e "${GREEN}Formatting partitions${NC}" && format_partitions
+echo -e "${GREEN}Mounting devices${NC}" && mount_devices
+
+# the end of the script will configure i3-gaps, zsh, neovim, polybar, conky and rofi launchers
+# ill ditch picom because it's overrated
+pkgs=(\
+	base linux linux-firmware base-devel grub efibootmgr os-prober\
+	xorg-server lightdm lightdm-slick-greeter i3-gaps\
+	sudo man-db zsh neovim openssh git tree\
+	neofetch rofi polybar conky dunst\
+)
+# nvim is usually removed for VMs
+	
+# install packages
+echo -e "${GREEN}Installing packages${NC}"
+pacstrap /mnt ${pkgs[@]}
+echo ""
+
+# generating fstab
+echo -e "${GREEN}Generating fstab${NC}"
+genfstab -U /mnt > /mnt/etc/fstab
+cat /mnt/etc/fstab
+
+cat > /mnt/root/install2.sh <<'EOF'
+#! /bin/bash
+
+set -e
+
+RED="\e[31m"
+GREEN="\e[32m"
+NC="\e[0m"
 
 function generate_locales () {
 	valid_locales=()
@@ -115,46 +154,60 @@ function generate_locales () {
 	locale-gen
 
 	# my default locales
-	cat > /etc/locale.conf <<EOF
-	LANG=en_US.UTF-8
-	LC_TIME=pt_PT.UTF-8
-EOF
+	cat > /etc/locale.conf <<-zxy
+		LANG=en_US.UTF-8
+		LC_TIME=pt_PT.UTF-8
+	zxy
 
+	echo ""
 }
 
-# configure system clock
-#timedatectl set-ntp true
+# generate and configure locales (don't remove these two, only add if needed)
+locales=("en_US" "pt_PT")
+echo -e "${GREEN}Generating and configuring locales${NC}" && generate_locales
 
-partitions=("EFI" "Linux filesystem" "Linux swap")
-declare -A DEVICES=()
+# set console keyboard layout
+echo "KEYMAP=pt-latin1" > /etc/vconsole.conf
 
-echo -e "${GREEN}Checking partitions${NC}" && get_mountpoints && prompt_mountpoints
-[[ ! "$NO_FORMAT" ]] && echo -e "${GREEN}Formatting partitions${NC}" && format_partitions
-echo -e "${GREEN}Mounting devices${NC}" && mount_devices
-
-# the end of the script will configure i3-gaps, zsh, neovim, polybar, conky and rofi launchers
-# ill ditch picom because it's overrated
-pkgs=(\
-	base linux linux-firmware base-devel grub efibootmgr os-prober\
-	xorg-server lightdm lightdm-slick-greeter i3-gaps\
-	sudo man-db neovim openssh git tree\
-	rofi polybar conky dunst\
-)
-# nvim is usually removed for VMs
-	
-# install packages
-echo -e "${GREEN}Installing packages${NC}"
-pacstrap /mnt ${pkgs[@]}
+# configure hostname
+read -p "Choose your hostname: " hostname
+echo "$hostname" > /etc/hostname
 echo ""
 
-# generating fstab
-echo -e "${GREEN}Generating fstab${NC}"
-genfstab -U /mnt >> /mnt/etc/fstab
-cat /mnt/etc/fstab
+# root passwd
+echo "Choose system's root password"
+passwd
+
+echo -e "\n${GREEN}Installing GRUB${NC}"
+# configuring bootloader
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+grub-mkconfig -o /boot/grub/grub.cfg
+# enable os-prober
+sed -i '/GRUB_DISABLE_OS_PROBER=false/s/^#//' /etc/default/grub
+# rerun grub-mkconfig with os-prober
+grub-mkconfig -o /boot/grub/grub.cfg
+# this is probably overkill idk
+os-prober
+
+# create user with sudo priviledge
+echo ""
+read -p "Choose your username: " username
+[[ $(grep zsh /etc/shells) ]] && shell="zsh" || shell="bash"
+useradd -m -G wheel -s /bin/"$shell" "$username"
+echo "Choose your password"
+passwd "$username"
+echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" > etc/sudoers.d/install_script
+
+echo -e "${GREEN}Basic installation complete${NC}\n"
+neofetch
+echo -e "${GREEN}Run the second script to setup dotfiles${NC}\n"
+
+echo -e "I am done! Reboot recommended!"
+EOF
+
+chmod 777 /mnt/root/install2.sh
 
 # changing root into new system
-arch-chroot /mnt
+arch-chroot /mnt /root/install2.sh
 
-# generate and configure locales (don't remove these two, add if needed)
-locales=("en_US", "pt_PT")
-echo -e "${GREEN}Generating and configuring locales${NC}" && generate_locales()
+exit 0
