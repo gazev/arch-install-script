@@ -97,7 +97,7 @@ function mount_devices () {
 
 
 # configure system clock
-#timedatectl set-ntp true
+timedatectl set-ntp true
 
 partitions=("EFI" "Linux filesystem" "Linux swap")
 declare -A DEVICES=()
